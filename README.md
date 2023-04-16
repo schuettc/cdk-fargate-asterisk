@@ -2,6 +2,8 @@
 
 This demo contains a CDK deployment of an Asterisk server to Amazon ECS using Fargate. This will allow us to deploy an Asterisk server to a Docker container.
 
+[https://github.com/schuettc/cdk-fargate-asterisk](https://github.com/schuettc/cdk-fargate-asterisk)
+
 ## Docker Image
 
 For this demo, we will be using the [andrius/asterisk](https://github.com/andrius/asterisk) Docker image.
@@ -10,7 +12,7 @@ For this demo, we will be using the [andrius/asterisk](https://github.com/andriu
 
 To allow for customized configuration, we will copy files from the local directory to the Asterisk server in the `Dockerfile`.
 
-```Dockerfile
+```docker
 COPY config/* /etc/asterisk
 COPY docker-entrypoint.sh /
 RUN chmod +x /docker-entrypoint.sh
@@ -28,19 +30,19 @@ external_signaling_address=PUBLIC_IP
 allow_reload=yes
 ```
 
-In the `pjsip.conf` file, we are simply loading a basic `udp` transport. We will configure this during deployment later.
+In the [`pjsip.conf`](https://github.com/schuettc/cdk-fargate-asterisk/blob/main/src/resources/asterisk/config/pjsip.conf) file, we are simply loading a basic `udp` transport. We will configure this during deployment later.
 
 ## Multiple Build Platforms
 
 In order to accommodate deployments from multiple platforms, we will ensure that the deployed version matches the built version.
 
-In the `Dockerfile` we will use `${BUILDPLATFORM}` to make sure we're building using the local architecture. We need to do this because we are copying files to the image and then building it before deploying it.
+In the [`Dockerfile`](https://github.com/schuettc/cdk-fargate-asterisk/blob/main/src/resources/asterisk/Dockerfile) we will use `${BUILDPLATFORM}` to make sure we're building using the local architecture. We need to do this because we are copying files to the image and then building it before deploying it.
 
-```Dockerfile
-FROM --platform=$BUILDPLATFORM andrius/asterisk
+```docker
+FROM --platform=${BUILDPLATFORM} andrius/asterisk
 ```
 
-In the `ecs.ts` file, we will determine the local architecture and use that.
+In the [`ecs.ts`](https://github.com/schuettc/cdk-fargate-asterisk/blob/main/src/ecs.ts) file, we will determine the local architecture and use that.
 
 ```typescript
 let deployArch: CpuArchitecture;
@@ -103,7 +105,7 @@ To access the running Asterisk:
 
 ## Asterisk Configuration
 
-During deployment of the Fargate container, the Dockerfile will use `docker-entrypoint.sh` as it's `ENTRYPOINT`. Everything in that file will be executed. We can use this to configure the Asterisk during deployment.
+During deployment of the Fargate container, the Dockerfile will use [`docker-entrypoint.sh`](https://github.com/schuettc/cdk-fargate-asterisk/blob/main/src/resources/asterisk/docker-entrypoint.sh) as it's `ENTRYPOINT`. Everything in that file will be executed. We can use this to configure the Asterisk during deployment.
 
 ```bash
 echo "METADATA: " ${ECS_CONTAINER_METADATA_URI_V4}
