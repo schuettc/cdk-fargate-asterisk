@@ -1,0 +1,1292 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`Snapshot 1`] = `
+{
+  "Outputs": {
+    "ClusterArn": {
+      "Value": {
+        "Fn::Join": [
+          "",
+          [
+            "CLUSTER=",
+            {
+              "Fn::GetAtt": [
+                "ECSResourcesCluster24881249",
+                "Arn",
+              ],
+            },
+          ],
+        ],
+      },
+    },
+    "ecsExecute": {
+      "Value": "aws ecs execute-command --cluster $CLUSTER --task $TASK --command "asterisk -rvvvvvv" --interactive",
+    },
+    "getTask": {
+      "Value": "TASK=$( aws ecs list-tasks --cluster $CLUSTER --query taskArns --output text )",
+    },
+  },
+  "Parameters": {
+    "BootstrapVersion": {
+      "Default": "/cdk-bootstrap/hnb659fds/version",
+      "Description": "Version of the CDK Bootstrap resources in this environment, automatically retrieved from SSM Parameter Store. [cdk:skip]",
+      "Type": "AWS::SSM::Parameter::Value<String>",
+    },
+    "SsmParameterValueawsserviceecsoptimizedamiamazonlinux2recommendedimageidC96584B6F00A464EAD1953AFF4B05118Parameter": {
+      "Default": "/aws/service/ecs/optimized-ami/amazon-linux-2/recommended/image_id",
+      "Type": "AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>",
+    },
+  },
+  "Resources": {
+    "ECSResourcesCluster24881249": {
+      "Type": "AWS::ECS::Cluster",
+    },
+    "ECSResourcesClusterSingleDeviceASGC268D91E": {
+      "Properties": {
+        "DesiredCapacity": "1",
+        "LaunchConfigurationName": {
+          "Ref": "ECSResourcesClusterSingleDeviceLaunchConfig859682E1",
+        },
+        "MaxSize": "1",
+        "MinSize": "1",
+        "Tags": [
+          {
+            "Key": "Name",
+            "PropagateAtLaunch": true,
+            "Value": "test/ECSResources/Cluster/SingleDevice",
+          },
+        ],
+        "VPCZoneIdentifier": [
+          {
+            "Ref": "VPCResourcesVPCAsteriskPublicSubnet1Subnet3D5614AE",
+          },
+          {
+            "Ref": "VPCResourcesVPCAsteriskPublicSubnet2Subnet0788D72E",
+          },
+        ],
+      },
+      "Type": "AWS::AutoScaling::AutoScalingGroup",
+      "UpdatePolicy": {
+        "AutoScalingReplacingUpdate": {
+          "WillReplace": true,
+        },
+        "AutoScalingScheduledAction": {
+          "IgnoreUnmodifiedGroupSizeProperties": true,
+        },
+      },
+    },
+    "ECSResourcesClusterSingleDeviceDrainECSHookFunctionAllowInvoketestECSResourcesClusterSingleDeviceLifecycleHookDrainHookTopicBA554E262C5E512E": {
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Fn::GetAtt": [
+            "ECSResourcesClusterSingleDeviceDrainECSHookFunctionB9FDD80F",
+            "Arn",
+          ],
+        },
+        "Principal": "sns.amazonaws.com",
+        "SourceArn": {
+          "Ref": "ECSResourcesClusterSingleDeviceLifecycleHookDrainHookTopicB6C37AE7",
+        },
+      },
+      "Type": "AWS::Lambda::Permission",
+    },
+    "ECSResourcesClusterSingleDeviceDrainECSHookFunctionB9FDD80F": {
+      "DependsOn": [
+        "ECSResourcesClusterSingleDeviceDrainECSHookFunctionServiceRoleDefaultPolicy478F56F0",
+        "ECSResourcesClusterSingleDeviceDrainECSHookFunctionServiceRole5F9BA616",
+      ],
+      "Properties": {
+        "Code": {
+          "ZipFile": "import boto3, json, os, time
+
+ecs = boto3.client('ecs')
+autoscaling = boto3.client('autoscaling')
+
+
+def lambda_handler(event, context):
+  print(json.dumps(dict(event, ResponseURL='...')))
+  cluster = os.environ['CLUSTER']
+  snsTopicArn = event['Records'][0]['Sns']['TopicArn']
+  lifecycle_event = json.loads(event['Records'][0]['Sns']['Message'])
+  instance_id = lifecycle_event.get('EC2InstanceId')
+  if not instance_id:
+    print('Got event without EC2InstanceId: %s', json.dumps(dict(event, ResponseURL='...')))
+    return
+
+  instance_arn = container_instance_arn(cluster, instance_id)
+  print('Instance %s has container instance ARN %s' % (lifecycle_event['EC2InstanceId'], instance_arn))
+
+  if not instance_arn:
+    return
+
+  task_arns = container_instance_task_arns(cluster, instance_arn)
+
+  if task_arns:
+    print('Instance ARN %s has task ARNs %s' % (instance_arn, ', '.join(task_arns)))
+
+  while has_tasks(cluster, instance_arn, task_arns):
+    time.sleep(10)
+
+  try:
+    print('Terminating instance %s' % instance_id)
+    autoscaling.complete_lifecycle_action(
+        LifecycleActionResult='CONTINUE',
+        **pick(lifecycle_event, 'LifecycleHookName', 'LifecycleActionToken', 'AutoScalingGroupName'))
+  except Exception as e:
+    # Lifecycle action may have already completed.
+    print(str(e))
+
+
+def container_instance_arn(cluster, instance_id):
+  """Turn an instance ID into a container instance ARN."""
+  arns = ecs.list_container_instances(cluster=cluster, filter='ec2InstanceId==' + instance_id)['containerInstanceArns']
+  if not arns:
+    return None
+  return arns[0]
+
+def container_instance_task_arns(cluster, instance_arn):
+  """Fetch tasks for a container instance ARN."""
+  arns = ecs.list_tasks(cluster=cluster, containerInstance=instance_arn)['taskArns']
+  return arns
+
+def has_tasks(cluster, instance_arn, task_arns):
+  """Return True if the instance is running tasks for the given cluster."""
+  instances = ecs.describe_container_instances(cluster=cluster, containerInstances=[instance_arn])['containerInstances']
+  if not instances:
+    return False
+  instance = instances[0]
+
+  if instance['status'] == 'ACTIVE':
+    # Start draining, then try again later
+    set_container_instance_to_draining(cluster, instance_arn)
+    return True
+
+  task_count = None
+
+  if task_arns:
+    # Fetch details for tasks running on the container instance
+    tasks = ecs.describe_tasks(cluster=cluster, tasks=task_arns)['tasks']
+    if tasks:
+      # Consider any non-stopped tasks as running
+      task_count = sum(task['lastStatus'] != 'STOPPED' for task in tasks) + instance['pendingTasksCount']
+
+  if not task_count:
+    # Fallback to instance task counts if detailed task information is unavailable
+    task_count = instance['runningTasksCount'] + instance['pendingTasksCount']
+
+  print('Instance %s has %s tasks' % (instance_arn, task_count))
+
+  return task_count > 0
+
+def set_container_instance_to_draining(cluster, instance_arn):
+  ecs.update_container_instances_state(
+      cluster=cluster,
+      containerInstances=[instance_arn], status='DRAINING')
+
+
+def pick(dct, *keys):
+  """Pick a subset of a dict."""
+  return {k: v for k, v in dct.items() if k in keys}
+",
+        },
+        "Environment": {
+          "Variables": {
+            "CLUSTER": {
+              "Ref": "ECSResourcesCluster24881249",
+            },
+          },
+        },
+        "Handler": "index.lambda_handler",
+        "Role": {
+          "Fn::GetAtt": [
+            "ECSResourcesClusterSingleDeviceDrainECSHookFunctionServiceRole5F9BA616",
+            "Arn",
+          ],
+        },
+        "Runtime": "python3.9",
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "test/ECSResources/Cluster/SingleDevice",
+          },
+        ],
+        "Timeout": 310,
+      },
+      "Type": "AWS::Lambda::Function",
+    },
+    "ECSResourcesClusterSingleDeviceDrainECSHookFunctionServiceRole5F9BA616": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition",
+                },
+                ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+              ],
+            ],
+          },
+        ],
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "test/ECSResources/Cluster/SingleDevice",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "ECSResourcesClusterSingleDeviceDrainECSHookFunctionServiceRoleDefaultPolicy478F56F0": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "ec2:DescribeInstances",
+                "ec2:DescribeInstanceAttribute",
+                "ec2:DescribeInstanceStatus",
+                "ec2:DescribeHosts",
+              ],
+              "Effect": "Allow",
+              "Resource": "*",
+            },
+            {
+              "Action": "autoscaling:CompleteLifecycleAction",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    "arn:",
+                    {
+                      "Ref": "AWS::Partition",
+                    },
+                    ":autoscaling:",
+                    {
+                      "Ref": "AWS::Region",
+                    },
+                    ":",
+                    {
+                      "Ref": "AWS::AccountId",
+                    },
+                    ":autoScalingGroup:*:autoScalingGroupName/",
+                    {
+                      "Ref": "ECSResourcesClusterSingleDeviceASGC268D91E",
+                    },
+                  ],
+                ],
+              },
+            },
+            {
+              "Action": [
+                "ecs:DescribeContainerInstances",
+                "ecs:DescribeTasks",
+              ],
+              "Condition": {
+                "ArnEquals": {
+                  "ecs:cluster": {
+                    "Fn::GetAtt": [
+                      "ECSResourcesCluster24881249",
+                      "Arn",
+                    ],
+                  },
+                },
+              },
+              "Effect": "Allow",
+              "Resource": "*",
+            },
+            {
+              "Action": [
+                "ecs:ListContainerInstances",
+                "ecs:SubmitContainerStateChange",
+                "ecs:SubmitTaskStateChange",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "ECSResourcesCluster24881249",
+                  "Arn",
+                ],
+              },
+            },
+            {
+              "Action": [
+                "ecs:UpdateContainerInstancesState",
+                "ecs:ListTasks",
+              ],
+              "Condition": {
+                "ArnEquals": {
+                  "ecs:cluster": {
+                    "Fn::GetAtt": [
+                      "ECSResourcesCluster24881249",
+                      "Arn",
+                    ],
+                  },
+                },
+              },
+              "Effect": "Allow",
+              "Resource": "*",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "ECSResourcesClusterSingleDeviceDrainECSHookFunctionServiceRoleDefaultPolicy478F56F0",
+        "Roles": [
+          {
+            "Ref": "ECSResourcesClusterSingleDeviceDrainECSHookFunctionServiceRole5F9BA616",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "ECSResourcesClusterSingleDeviceDrainECSHookFunctionTopic236DA927": {
+      "Properties": {
+        "Endpoint": {
+          "Fn::GetAtt": [
+            "ECSResourcesClusterSingleDeviceDrainECSHookFunctionB9FDD80F",
+            "Arn",
+          ],
+        },
+        "Protocol": "lambda",
+        "TopicArn": {
+          "Ref": "ECSResourcesClusterSingleDeviceLifecycleHookDrainHookTopicB6C37AE7",
+        },
+      },
+      "Type": "AWS::SNS::Subscription",
+    },
+    "ECSResourcesClusterSingleDeviceInstanceProfile035C2AD7": {
+      "Properties": {
+        "Roles": [
+          {
+            "Ref": "ECSResourcesClusterSingleDeviceInstanceRoleDF0CA2E3",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::InstanceProfile",
+    },
+    "ECSResourcesClusterSingleDeviceInstanceRoleDF0CA2E3": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "ec2.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition",
+                },
+                ":iam::aws:policy/AmazonSSMManagedInstanceCore",
+              ],
+            ],
+          },
+        ],
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "test/ECSResources/Cluster/SingleDevice",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "ECSResourcesClusterSingleDeviceInstanceRoleDefaultPolicyA5E9EEFB": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "ecs:DeregisterContainerInstance",
+                "ecs:RegisterContainerInstance",
+                "ecs:Submit*",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "ECSResourcesCluster24881249",
+                  "Arn",
+                ],
+              },
+            },
+            {
+              "Action": [
+                "ecs:Poll",
+                "ecs:StartTelemetrySession",
+              ],
+              "Condition": {
+                "ArnEquals": {
+                  "ecs:cluster": {
+                    "Fn::GetAtt": [
+                      "ECSResourcesCluster24881249",
+                      "Arn",
+                    ],
+                  },
+                },
+              },
+              "Effect": "Allow",
+              "Resource": "*",
+            },
+            {
+              "Action": [
+                "ecs:DiscoverPollEndpoint",
+                "ecr:GetAuthorizationToken",
+                "logs:CreateLogStream",
+                "logs:PutLogEvents",
+              ],
+              "Effect": "Allow",
+              "Resource": "*",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "ECSResourcesClusterSingleDeviceInstanceRoleDefaultPolicyA5E9EEFB",
+        "Roles": [
+          {
+            "Ref": "ECSResourcesClusterSingleDeviceInstanceRoleDF0CA2E3",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "ECSResourcesClusterSingleDeviceInstanceSecurityGroupC9AA79BB": {
+      "Properties": {
+        "GroupDescription": "test/ECSResources/Cluster/SingleDevice/InstanceSecurityGroup",
+        "SecurityGroupEgress": [
+          {
+            "CidrIp": "0.0.0.0/0",
+            "Description": "Allow all outbound traffic by default",
+            "IpProtocol": "-1",
+          },
+        ],
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "test/ECSResources/Cluster/SingleDevice",
+          },
+        ],
+        "VpcId": {
+          "Ref": "VPCResourcesVPC89517325",
+        },
+      },
+      "Type": "AWS::EC2::SecurityGroup",
+    },
+    "ECSResourcesClusterSingleDeviceLaunchConfig859682E1": {
+      "DependsOn": [
+        "ECSResourcesClusterSingleDeviceInstanceRoleDefaultPolicyA5E9EEFB",
+        "ECSResourcesClusterSingleDeviceInstanceRoleDF0CA2E3",
+      ],
+      "Properties": {
+        "IamInstanceProfile": {
+          "Ref": "ECSResourcesClusterSingleDeviceInstanceProfile035C2AD7",
+        },
+        "ImageId": {
+          "Ref": "SsmParameterValueawsserviceecsoptimizedamiamazonlinux2recommendedimageidC96584B6F00A464EAD1953AFF4B05118Parameter",
+        },
+        "InstanceType": "m5.large",
+        "SecurityGroups": [
+          {
+            "Fn::GetAtt": [
+              "ECSResourcesClusterSingleDeviceInstanceSecurityGroupC9AA79BB",
+              "GroupId",
+            ],
+          },
+        ],
+        "UserData": {
+          "Fn::Base64": {
+            "Fn::Join": [
+              "",
+              [
+                "#!/bin/bash
+echo ECS_CLUSTER=",
+                {
+                  "Ref": "ECSResourcesCluster24881249",
+                },
+                " >> /etc/ecs/ecs.config
+sudo iptables --insert FORWARD 1 --in-interface docker+ --destination 169.254.169.254/32 --jump DROP
+sudo service iptables save
+echo ECS_AWSVPC_BLOCK_IMDS=true >> /etc/ecs/ecs.config",
+              ],
+            ],
+          },
+        },
+      },
+      "Type": "AWS::AutoScaling::LaunchConfiguration",
+    },
+    "ECSResourcesClusterSingleDeviceLifecycleHookDrainHook679325A7": {
+      "DependsOn": [
+        "ECSResourcesClusterSingleDeviceLifecycleHookDrainHookRoleDefaultPolicy05DF6654",
+        "ECSResourcesClusterSingleDeviceLifecycleHookDrainHookRoleFD5767CD",
+      ],
+      "Properties": {
+        "AutoScalingGroupName": {
+          "Ref": "ECSResourcesClusterSingleDeviceASGC268D91E",
+        },
+        "DefaultResult": "CONTINUE",
+        "HeartbeatTimeout": 300,
+        "LifecycleTransition": "autoscaling:EC2_INSTANCE_TERMINATING",
+        "NotificationTargetARN": {
+          "Ref": "ECSResourcesClusterSingleDeviceLifecycleHookDrainHookTopicB6C37AE7",
+        },
+        "RoleARN": {
+          "Fn::GetAtt": [
+            "ECSResourcesClusterSingleDeviceLifecycleHookDrainHookRoleFD5767CD",
+            "Arn",
+          ],
+        },
+      },
+      "Type": "AWS::AutoScaling::LifecycleHook",
+    },
+    "ECSResourcesClusterSingleDeviceLifecycleHookDrainHookRoleDefaultPolicy05DF6654": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sns:Publish",
+              "Effect": "Allow",
+              "Resource": {
+                "Ref": "ECSResourcesClusterSingleDeviceLifecycleHookDrainHookTopicB6C37AE7",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "ECSResourcesClusterSingleDeviceLifecycleHookDrainHookRoleDefaultPolicy05DF6654",
+        "Roles": [
+          {
+            "Ref": "ECSResourcesClusterSingleDeviceLifecycleHookDrainHookRoleFD5767CD",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "ECSResourcesClusterSingleDeviceLifecycleHookDrainHookRoleFD5767CD": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "autoscaling.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "test/ECSResources/Cluster/SingleDevice",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "ECSResourcesClusterSingleDeviceLifecycleHookDrainHookTopicB6C37AE7": {
+      "Properties": {
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "test/ECSResources/Cluster/SingleDevice",
+          },
+        ],
+      },
+      "Type": "AWS::SNS::Topic",
+    },
+    "ECSResourcesFargateService8B5707BB": {
+      "Properties": {
+        "Cluster": {
+          "Ref": "ECSResourcesCluster24881249",
+        },
+        "DeploymentConfiguration": {
+          "MaximumPercent": 200,
+          "MinimumHealthyPercent": 50,
+        },
+        "EnableECSManagedTags": false,
+        "EnableExecuteCommand": true,
+        "LaunchType": "FARGATE",
+        "NetworkConfiguration": {
+          "AwsvpcConfiguration": {
+            "AssignPublicIp": "ENABLED",
+            "SecurityGroups": [
+              {
+                "Fn::GetAtt": [
+                  "VPCResourcesAsteriskSecurityGroupB50B41CA",
+                  "GroupId",
+                ],
+              },
+            ],
+            "Subnets": [
+              {
+                "Ref": "VPCResourcesVPCAsteriskPublicSubnet1Subnet3D5614AE",
+              },
+              {
+                "Ref": "VPCResourcesVPCAsteriskPublicSubnet2Subnet0788D72E",
+              },
+            ],
+          },
+        },
+        "TaskDefinition": {
+          "Ref": "ECSResourcesTaskDefinition8E540F33",
+        },
+      },
+      "Type": "AWS::ECS::Service",
+    },
+    "ECSResourcesTaskDefinition8E540F33": {
+      "Properties": {
+        "ContainerDefinitions": [
+          {
+            "Environment": [
+              {
+                "Name": "CLUSTER_NAME",
+                "Value": {
+                  "Ref": "ECSResourcesCluster24881249",
+                },
+              },
+            ],
+            "Essential": true,
+            "Image": {
+              "Fn::Sub": "\${AWS::AccountId}.dkr.ecr.\${AWS::Region}.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-\${AWS::AccountId}-\${AWS::Region}:cb6ae3d586b21b53d6b406eea4617ce1edb8dea9e1064a6a8df354ac24356dfc",
+            },
+            "MountPoints": [
+              {
+                "ContainerPath": "/var/log/asterisk",
+                "ReadOnly": false,
+                "SourceVolume": "asteriskLogs",
+              },
+            ],
+            "Name": "Container",
+            "PortMappings": [
+              {
+                "ContainerPort": 5060,
+                "Protocol": "udp",
+              },
+            ],
+          },
+        ],
+        "Cpu": "1024",
+        "ExecutionRoleArn": {
+          "Fn::GetAtt": [
+            "ECSResourcesTaskDefinitionExecutionRoleC415121B",
+            "Arn",
+          ],
+        },
+        "Family": "testECSResourcesTaskDefinitionB010C65F",
+        "Memory": "2048",
+        "NetworkMode": "awsvpc",
+        "RequiresCompatibilities": [
+          "FARGATE",
+        ],
+        "RuntimePlatform": {
+          "CpuArchitecture": "ARM64",
+          "OperatingSystemFamily": "LINUX",
+        },
+        "TaskRoleArn": {
+          "Fn::GetAtt": [
+            "ECSResourcesasteriskTaskRole1E1AC42F",
+            "Arn",
+          ],
+        },
+        "Volumes": [
+          {
+            "EFSVolumeConfiguration": {
+              "AuthorizationConfig": {
+                "AccessPointId": {
+                  "Ref": "ECSResourcesasteriskAccessPointC974AC78",
+                },
+                "IAM": "ENABLED",
+              },
+              "FilesystemId": {
+                "Ref": "ECSResourcesfileSystem699844AB",
+              },
+              "TransitEncryption": "ENABLED",
+            },
+            "Name": "asteriskLogs",
+          },
+        ],
+      },
+      "Type": "AWS::ECS::TaskDefinition",
+    },
+    "ECSResourcesTaskDefinitionExecutionRoleC415121B": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "ecs-tasks.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "ECSResourcesTaskDefinitionExecutionRoleDefaultPolicy43D38C65": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "ecr:BatchCheckLayerAvailability",
+                "ecr:GetDownloadUrlForLayer",
+                "ecr:BatchGetImage",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    "arn:",
+                    {
+                      "Ref": "AWS::Partition",
+                    },
+                    ":ecr:",
+                    {
+                      "Ref": "AWS::Region",
+                    },
+                    ":",
+                    {
+                      "Ref": "AWS::AccountId",
+                    },
+                    ":repository/",
+                    {
+                      "Fn::Sub": "cdk-hnb659fds-container-assets-\${AWS::AccountId}-\${AWS::Region}",
+                    },
+                  ],
+                ],
+              },
+            },
+            {
+              "Action": "ecr:GetAuthorizationToken",
+              "Effect": "Allow",
+              "Resource": "*",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "ECSResourcesTaskDefinitionExecutionRoleDefaultPolicy43D38C65",
+        "Roles": [
+          {
+            "Ref": "ECSResourcesTaskDefinitionExecutionRoleC415121B",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "ECSResourcesasteriskAccessPointC974AC78": {
+      "Properties": {
+        "AccessPointTags": [
+          {
+            "Key": "Name",
+            "Value": "test/ECSResources/asteriskAccessPoint",
+          },
+        ],
+        "FileSystemId": {
+          "Ref": "ECSResourcesfileSystem699844AB",
+        },
+        "PosixUser": {
+          "Gid": "1000",
+          "Uid": "1000",
+        },
+        "RootDirectory": {
+          "CreationInfo": {
+            "OwnerGid": "1000",
+            "OwnerUid": "1000",
+            "Permissions": "0750",
+          },
+          "Path": "/asteriskLogs",
+        },
+      },
+      "Type": "AWS::EFS::AccessPoint",
+    },
+    "ECSResourcesasteriskTaskRole1E1AC42F": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "ecs-tasks.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "Policies": [
+          {
+            "PolicyDocument": {
+              "Statement": [
+                {
+                  "Action": [
+                    "elasticfilesystem:ClientMount",
+                    "elasticfilesystem:ClientWrite",
+                    "elasticfilesystem:DescribeFileSystems",
+                  ],
+                  "Effect": "Allow",
+                  "Resource": {
+                    "Fn::GetAtt": [
+                      "ECSResourcesfileSystem699844AB",
+                      "Arn",
+                    ],
+                  },
+                },
+              ],
+              "Version": "2012-10-17",
+            },
+            "PolicyName": "keysPolicy",
+          },
+          {
+            "PolicyDocument": {
+              "Statement": [
+                {
+                  "Action": "chime:PutVoiceConnector*",
+                  "Effect": "Allow",
+                  "Resource": "*",
+                },
+              ],
+              "Version": "2012-10-17",
+            },
+            "PolicyName": "asteriskTaskPolicy",
+          },
+          {
+            "PolicyDocument": {
+              "Statement": [
+                {
+                  "Action": "ecs:DescribeTasks",
+                  "Effect": "Allow",
+                  "Resource": {
+                    "Fn::Join": [
+                      "",
+                      [
+                        "arn:aws:ecs:",
+                        {
+                          "Ref": "AWS::Region",
+                        },
+                        ":",
+                        {
+                          "Ref": "AWS::AccountId",
+                        },
+                        ":task/",
+                        {
+                          "Ref": "ECSResourcesCluster24881249",
+                        },
+                        "/*",
+                      ],
+                    ],
+                  },
+                },
+              ],
+              "Version": "2012-10-17",
+            },
+            "PolicyName": "ecsTaskPolicy",
+          },
+          {
+            "PolicyDocument": {
+              "Statement": [
+                {
+                  "Action": "ec2:DescribeNetworkInterfaces",
+                  "Effect": "Allow",
+                  "Resource": "*",
+                },
+              ],
+              "Version": "2012-10-17",
+            },
+            "PolicyName": "ec2TaskPolicy",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "ECSResourcesasteriskTaskRoleDefaultPolicyFC86533D": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "ssmmessages:CreateControlChannel",
+                "ssmmessages:CreateDataChannel",
+                "ssmmessages:OpenControlChannel",
+                "ssmmessages:OpenDataChannel",
+              ],
+              "Effect": "Allow",
+              "Resource": "*",
+            },
+            {
+              "Action": "logs:DescribeLogGroups",
+              "Effect": "Allow",
+              "Resource": "*",
+            },
+            {
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:DescribeLogStreams",
+                "logs:PutLogEvents",
+              ],
+              "Effect": "Allow",
+              "Resource": "*",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "ECSResourcesasteriskTaskRoleDefaultPolicyFC86533D",
+        "Roles": [
+          {
+            "Ref": "ECSResourcesasteriskTaskRole1E1AC42F",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "ECSResourcesfileSystem699844AB": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "Encrypted": true,
+        "FileSystemTags": [
+          {
+            "Key": "Name",
+            "Value": "test/ECSResources/fileSystem",
+          },
+        ],
+      },
+      "Type": "AWS::EFS::FileSystem",
+      "UpdateReplacePolicy": "Delete",
+    },
+    "ECSResourcesfileSystemEfsMountTarget1D4ECB079": {
+      "Properties": {
+        "FileSystemId": {
+          "Ref": "ECSResourcesfileSystem699844AB",
+        },
+        "SecurityGroups": [
+          {
+            "Fn::GetAtt": [
+              "ECSResourcesfileSystemEfsSecurityGroupE8484359",
+              "GroupId",
+            ],
+          },
+        ],
+        "SubnetId": {
+          "Ref": "VPCResourcesVPCAsteriskPublicSubnet1Subnet3D5614AE",
+        },
+      },
+      "Type": "AWS::EFS::MountTarget",
+    },
+    "ECSResourcesfileSystemEfsMountTarget24493D11A": {
+      "Properties": {
+        "FileSystemId": {
+          "Ref": "ECSResourcesfileSystem699844AB",
+        },
+        "SecurityGroups": [
+          {
+            "Fn::GetAtt": [
+              "ECSResourcesfileSystemEfsSecurityGroupE8484359",
+              "GroupId",
+            ],
+          },
+        ],
+        "SubnetId": {
+          "Ref": "VPCResourcesVPCAsteriskPublicSubnet2Subnet0788D72E",
+        },
+      },
+      "Type": "AWS::EFS::MountTarget",
+    },
+    "ECSResourcesfileSystemEfsSecurityGroupE8484359": {
+      "Properties": {
+        "GroupDescription": "test/ECSResources/fileSystem/EfsSecurityGroup",
+        "SecurityGroupEgress": [
+          {
+            "CidrIp": "0.0.0.0/0",
+            "Description": "Allow all outbound traffic by default",
+            "IpProtocol": "-1",
+          },
+        ],
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "test/ECSResources/fileSystem",
+          },
+        ],
+        "VpcId": {
+          "Ref": "VPCResourcesVPC89517325",
+        },
+      },
+      "Type": "AWS::EC2::SecurityGroup",
+    },
+    "ECSResourcesfileSystemEfsSecurityGroupfromtestVPCResourcesAsteriskSecurityGroup71FC3EDF20493BB50650": {
+      "Properties": {
+        "Description": "from testVPCResourcesAsteriskSecurityGroup71FC3EDF:2049",
+        "FromPort": 2049,
+        "GroupId": {
+          "Fn::GetAtt": [
+            "ECSResourcesfileSystemEfsSecurityGroupE8484359",
+            "GroupId",
+          ],
+        },
+        "IpProtocol": "tcp",
+        "SourceSecurityGroupId": {
+          "Fn::GetAtt": [
+            "VPCResourcesAsteriskSecurityGroupB50B41CA",
+            "GroupId",
+          ],
+        },
+        "ToPort": 2049,
+      },
+      "Type": "AWS::EC2::SecurityGroupIngress",
+    },
+    "VPCResourcesAsteriskSecurityGroupB50B41CA": {
+      "Properties": {
+        "GroupDescription": "Security Group for Asterisk Instance",
+        "SecurityGroupEgress": [
+          {
+            "CidrIp": "0.0.0.0/0",
+            "Description": "Allow all outbound traffic by default",
+            "IpProtocol": "-1",
+          },
+        ],
+        "VpcId": {
+          "Ref": "VPCResourcesVPC89517325",
+        },
+      },
+      "Type": "AWS::EC2::SecurityGroup",
+    },
+    "VPCResourcesVPC89517325": {
+      "Properties": {
+        "CidrBlock": "10.0.0.0/16",
+        "EnableDnsHostnames": true,
+        "EnableDnsSupport": true,
+        "InstanceTenancy": "default",
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "test/VPCResources/VPC",
+          },
+        ],
+      },
+      "Type": "AWS::EC2::VPC",
+    },
+    "VPCResourcesVPCAsteriskPublicSubnet1DefaultRouteBF89EBDB": {
+      "DependsOn": [
+        "VPCResourcesVPCVPCGW8CE4D94B",
+      ],
+      "Properties": {
+        "DestinationCidrBlock": "0.0.0.0/0",
+        "GatewayId": {
+          "Ref": "VPCResourcesVPCIGW0870CE93",
+        },
+        "RouteTableId": {
+          "Ref": "VPCResourcesVPCAsteriskPublicSubnet1RouteTableF7ECC36A",
+        },
+      },
+      "Type": "AWS::EC2::Route",
+    },
+    "VPCResourcesVPCAsteriskPublicSubnet1RouteTableAssociationA31556F5": {
+      "Properties": {
+        "RouteTableId": {
+          "Ref": "VPCResourcesVPCAsteriskPublicSubnet1RouteTableF7ECC36A",
+        },
+        "SubnetId": {
+          "Ref": "VPCResourcesVPCAsteriskPublicSubnet1Subnet3D5614AE",
+        },
+      },
+      "Type": "AWS::EC2::SubnetRouteTableAssociation",
+    },
+    "VPCResourcesVPCAsteriskPublicSubnet1RouteTableF7ECC36A": {
+      "Properties": {
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "test/VPCResources/VPC/AsteriskPublicSubnet1",
+          },
+        ],
+        "VpcId": {
+          "Ref": "VPCResourcesVPC89517325",
+        },
+      },
+      "Type": "AWS::EC2::RouteTable",
+    },
+    "VPCResourcesVPCAsteriskPublicSubnet1Subnet3D5614AE": {
+      "Properties": {
+        "AvailabilityZone": {
+          "Fn::Select": [
+            0,
+            {
+              "Fn::GetAZs": "",
+            },
+          ],
+        },
+        "CidrBlock": "10.0.0.0/24",
+        "MapPublicIpOnLaunch": true,
+        "Tags": [
+          {
+            "Key": "aws-cdk:subnet-name",
+            "Value": "AsteriskPublic",
+          },
+          {
+            "Key": "aws-cdk:subnet-type",
+            "Value": "Public",
+          },
+          {
+            "Key": "Name",
+            "Value": "test/VPCResources/VPC/AsteriskPublicSubnet1",
+          },
+        ],
+        "VpcId": {
+          "Ref": "VPCResourcesVPC89517325",
+        },
+      },
+      "Type": "AWS::EC2::Subnet",
+    },
+    "VPCResourcesVPCAsteriskPublicSubnet2DefaultRoute9196B324": {
+      "DependsOn": [
+        "VPCResourcesVPCVPCGW8CE4D94B",
+      ],
+      "Properties": {
+        "DestinationCidrBlock": "0.0.0.0/0",
+        "GatewayId": {
+          "Ref": "VPCResourcesVPCIGW0870CE93",
+        },
+        "RouteTableId": {
+          "Ref": "VPCResourcesVPCAsteriskPublicSubnet2RouteTableC7D9C1B9",
+        },
+      },
+      "Type": "AWS::EC2::Route",
+    },
+    "VPCResourcesVPCAsteriskPublicSubnet2RouteTableAssociation14E99375": {
+      "Properties": {
+        "RouteTableId": {
+          "Ref": "VPCResourcesVPCAsteriskPublicSubnet2RouteTableC7D9C1B9",
+        },
+        "SubnetId": {
+          "Ref": "VPCResourcesVPCAsteriskPublicSubnet2Subnet0788D72E",
+        },
+      },
+      "Type": "AWS::EC2::SubnetRouteTableAssociation",
+    },
+    "VPCResourcesVPCAsteriskPublicSubnet2RouteTableC7D9C1B9": {
+      "Properties": {
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "test/VPCResources/VPC/AsteriskPublicSubnet2",
+          },
+        ],
+        "VpcId": {
+          "Ref": "VPCResourcesVPC89517325",
+        },
+      },
+      "Type": "AWS::EC2::RouteTable",
+    },
+    "VPCResourcesVPCAsteriskPublicSubnet2Subnet0788D72E": {
+      "Properties": {
+        "AvailabilityZone": {
+          "Fn::Select": [
+            1,
+            {
+              "Fn::GetAZs": "",
+            },
+          ],
+        },
+        "CidrBlock": "10.0.1.0/24",
+        "MapPublicIpOnLaunch": true,
+        "Tags": [
+          {
+            "Key": "aws-cdk:subnet-name",
+            "Value": "AsteriskPublic",
+          },
+          {
+            "Key": "aws-cdk:subnet-type",
+            "Value": "Public",
+          },
+          {
+            "Key": "Name",
+            "Value": "test/VPCResources/VPC/AsteriskPublicSubnet2",
+          },
+        ],
+        "VpcId": {
+          "Ref": "VPCResourcesVPC89517325",
+        },
+      },
+      "Type": "AWS::EC2::Subnet",
+    },
+    "VPCResourcesVPCIGW0870CE93": {
+      "Properties": {
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "test/VPCResources/VPC",
+          },
+        ],
+      },
+      "Type": "AWS::EC2::InternetGateway",
+    },
+    "VPCResourcesVPCVPCGW8CE4D94B": {
+      "Properties": {
+        "InternetGatewayId": {
+          "Ref": "VPCResourcesVPCIGW0870CE93",
+        },
+        "VpcId": {
+          "Ref": "VPCResourcesVPC89517325",
+        },
+      },
+      "Type": "AWS::EC2::VPCGatewayAttachment",
+    },
+  },
+  "Rules": {
+    "CheckBootstrapVersion": {
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Contains": [
+                  [
+                    "1",
+                    "2",
+                    "3",
+                    "4",
+                    "5",
+                  ],
+                  {
+                    "Ref": "BootstrapVersion",
+                  },
+                ],
+              },
+            ],
+          },
+          "AssertDescription": "CDK bootstrap stack version 6 required. Please run 'cdk bootstrap' with a recent version of the CDK CLI.",
+        },
+      ],
+    },
+  },
+}
+`;
