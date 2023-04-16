@@ -122,3 +122,17 @@ sed -i "s/PUBLIC_IP/$PUBLIC_IP/g" /etc/asterisk/pjsip.conf
 ```
 
 With this shell script, we will determine the `PUBLIC_IP` of the container that is running and use that to configure the `pjsip.conf` file. This can be expanded to configure other parts of the Asterisk server as needed.
+
+## Deploy/Destroy
+
+To deploy this demo:
+
+```bash
+yarn launch
+```
+
+To destroy this demo:
+
+```
+yarn cdk destroy
+```
