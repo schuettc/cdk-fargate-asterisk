@@ -45,11 +45,9 @@ export class ECSResources extends Construct {
     let deployArch: CpuArchitecture;
     const cpuArch = os.arch();
     if (cpuArch === 'arm64') {
-      // Deployment platform is arm64
       deployArch = CpuArchitecture.ARM64;
     } else {
       deployArch = CpuArchitecture.X86_64;
-      // Deployment platform is amd64
     }
 
     this.cluster = new Cluster(this, 'Cluster', {
@@ -96,14 +94,6 @@ export class ECSResources extends Construct {
                 'elasticfilesystem:ClientWrite',
                 'elasticfilesystem:DescribeFileSystems',
               ],
-            }),
-          ],
-        }),
-        asteriskTaskPolicy: new PolicyDocument({
-          statements: [
-            new PolicyStatement({
-              resources: ['*'],
-              actions: ['chime:PutVoiceConnector*'],
             }),
           ],
         }),

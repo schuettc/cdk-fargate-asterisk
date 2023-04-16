@@ -19,8 +19,11 @@ exports[`Snapshot 1`] = `
         ],
       },
     },
-    "ecsExecute": {
+    "ecsExecuteAsterisk": {
       "Value": "aws ecs execute-command --cluster $CLUSTER --task $TASK --command "asterisk -rvvvvvv" --interactive",
+    },
+    "ecsExecuteSh": {
+      "Value": "aws ecs execute-command --cluster $CLUSTER --task $TASK --command "sh" --interactive",
     },
     "getTask": {
       "Value": "TASK=$( aws ecs list-tasks --cluster $CLUSTER --query taskArns --output text )",
@@ -865,19 +868,6 @@ echo ECS_AWSVPC_BLOCK_IMDS=true >> /etc/ecs/ecs.config",
               "Version": "2012-10-17",
             },
             "PolicyName": "keysPolicy",
-          },
-          {
-            "PolicyDocument": {
-              "Statement": [
-                {
-                  "Action": "chime:PutVoiceConnector*",
-                  "Effect": "Allow",
-                  "Resource": "*",
-                },
-              ],
-              "Version": "2012-10-17",
-            },
-            "PolicyName": "asteriskTaskPolicy",
           },
           {
             "PolicyDocument": {
