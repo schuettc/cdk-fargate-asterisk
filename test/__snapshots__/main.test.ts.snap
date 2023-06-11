@@ -708,7 +708,7 @@ echo ECS_AWSVPC_BLOCK_IMDS=true >> /etc/ecs/ecs.config",
           "FARGATE",
         ],
         "RuntimePlatform": {
-          "CpuArchitecture": "ARM64",
+          "CpuArchitecture": "X86_64",
           "OperatingSystemFamily": "LINUX",
         },
         "TaskRoleArn": {
