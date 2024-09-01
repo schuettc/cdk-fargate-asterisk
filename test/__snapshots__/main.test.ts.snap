@@ -624,11 +624,20 @@ echo ECS_AWSVPC_BLOCK_IMDS=true >> /etc/ecs/ecs.config",
       "Type": "AWS::SNS::Topic",
     },
     "ECSResourcesFargateService8B5707BB": {
+      "DependsOn": [
+        "ECSResourcesasteriskTaskRoleDefaultPolicyFC86533D",
+        "ECSResourcesasteriskTaskRole1E1AC42F",
+      ],
       "Properties": {
         "Cluster": {
           "Ref": "ECSResourcesCluster24881249",
         },
         "DeploymentConfiguration": {
+          "Alarms": {
+            "AlarmNames": [],
+            "Enable": false,
+            "Rollback": false,
+          },
           "MaximumPercent": 200,
           "MinimumHealthyPercent": 50,
         },
