@@ -1,4 +1,6 @@
 const { awscdk } = require('projen');
+const { UpgradeDependenciesSchedule } = require('projen/lib/javascript');
+
 const project = new awscdk.AwsCdkTypeScriptApp({
   cdkVersion: '2.70.0',
   defaultReleaseBranch: 'main',
@@ -6,13 +8,15 @@ const project = new awscdk.AwsCdkTypeScriptApp({
   license: 'MIT-0',
   author: 'Court Schuett',
   copyrightOwner: 'Court Schuett',
-  authorAddress: 'https://aws.amazon.com',
-  defaultReleaseBranch: 'main',
+  projenrcTs: true,
+  authorAddress: 'https://subaud.io',
+  jest: false,
   appEntrypoint: 'cdk-fargate-asterisk.ts',
   depsUpgradeOptions: {
     ignoreProjen: false,
     workflowOptions: {
       labels: ['auto-approve', 'auto-merge'],
+      schedule: UpgradeDependenciesSchedule.WEEKLY,
     },
   },
   autoApproveOptions: {
@@ -22,7 +26,6 @@ const project = new awscdk.AwsCdkTypeScriptApp({
   deps: ['dotenv'],
   autoApproveUpgrades: true,
   projenUpgradeSecret: 'PROJEN_GITHUB_TOKEN',
-  defaultReleaseBranch: 'main',
 });
 
 const common_exclude = [
@@ -36,6 +39,28 @@ const common_exclude = [
 
 project.addTask('launch', {
   exec: 'yarn && yarn projen && yarn build && yarn cdk bootstrap && yarn cdk deploy --require-approval never',
+});
+
+project.tsconfigDev.file.addOverride('include', [
+  'src/**/*.ts',
+  'site/src/**/*.tsx',
+  'projenrc.ts',
+]);
+
+project.eslint.addOverride({
+  files: ['src/resources/**/*.ts'],
+  rules: {
+    'indent': 'off',
+    '@typescript-eslint/indent': 'off',
+  },
+});
+
+project.eslint.addOverride({
+  files: ['src/resources/**/*.ts'],
+  rules: {
+    '@typescript-eslint/no-require-imports': 'off',
+    'import/no-extraneous-dependencies': 'off',
+  },
 });
 
 project.gitignore.exclude(...common_exclude);
